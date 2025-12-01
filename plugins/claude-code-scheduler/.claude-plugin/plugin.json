@@ -1,0 +1,9 @@
+{
+    "name": "claude-code-scheduler",
+    "description": "Claude Code Scheduler",
+    "version": "0.1.0",
+    "author": {
+        "name": "Dennis Vriend",
+        "email": "dvriend@ilionx.com"
+    }
+}

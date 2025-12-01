@@ -1,0 +1,19 @@
+{
+    "name": "claude-code-scheduler",
+    "owner": {
+        "name": "Dennis Vriend",
+        "email": "dvriend@ilionx.com",
+        "url": "https://github.com/dnvriend"
+    },
+    "metadata": {
+        "description": "Marketplace for claude-code-scheduler CLI plugin - Claude Code Scheduler",
+        "version": "0.1.0"
+    },
+    "plugins": [
+        {
+            "name": "claude-code-scheduler",
+            "source": "./plugins/claude-code-scheduler",
+            "description": "Claude Code Scheduler"
+        }
+    ]
+}
