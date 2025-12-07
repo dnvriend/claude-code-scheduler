@@ -12,6 +12,10 @@
 
 A GUI application and CLI tool that provides scheduling and management for Claude Code CLI sessions with REST API control.
 
+<p align="center">
+  <img src="screenshots/screenshot1.png" alt="Claude Code Scheduler GUI" width="800">
+</p>
+
 ## Features
 
 - **Scheduling**: Manual, interval, calendar, and file-watch triggers
