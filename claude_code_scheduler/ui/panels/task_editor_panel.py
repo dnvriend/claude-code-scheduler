@@ -204,13 +204,13 @@ class TaskEditorPanel(QFrame):
         schedule_section.section_layout.addWidget(self.view_schedule)  # type: ignore[attr-defined]
         layout.addWidget(schedule_section)
 
-        # Command section
-        command_section = self._create_section("Command")
-        self.view_command = QLabel()
-        self.view_command.setObjectName("viewValue")
-        self.view_command.setWordWrap(True)
-        command_section.section_layout.addWidget(self.view_command)  # type: ignore[attr-defined]
-        layout.addWidget(command_section)
+        # Prompt section
+        prompt_section = self._create_section("Prompt")
+        self.view_prompt = QLabel()
+        self.view_prompt.setObjectName("viewValue")
+        self.view_prompt.setWordWrap(True)
+        prompt_section.section_layout.addWidget(self.view_prompt)  # type: ignore[attr-defined]
+        layout.addWidget(prompt_section)
 
         # Working Directory section
         wd_section = self._create_section("Working Directory")
@@ -506,7 +506,7 @@ class TaskEditorPanel(QFrame):
         self.view_model.setProperty("model", task.model)
         self.view_profile.setText(self._get_profile_name(task.profile))
         self.view_schedule.setText(self._get_schedule_text(task))
-        self.view_command.setText(task.command or "(no command)")
+        self.view_prompt.setText(task.prompt or "(no prompt)")
         self.view_working_dir.setText(self._get_working_dir_text(task))
         self.view_permissions.setText(task.permissions)
         self.view_session.setText(task.session_mode)
@@ -533,15 +533,15 @@ class TaskEditorPanel(QFrame):
             self.edit_session.setCurrentText(task.session_mode)
             self._update_working_dir_display(task.job_id)
 
-            # Set command type and content
-            self.command_type_selector.set_command_type(task.command_type)
-            self._on_command_type_changed(task.command_type)
-            # Load command into the appropriate field
-            if task.command_type == "prompt":
-                self.edit_prompt.setPlainText(task.command)
+            # Set prompt type and content
+            self.command_type_selector.set_command_type(task.prompt_type)
+            self._on_command_type_changed(task.prompt_type)
+            # Load prompt into the appropriate field
+            if task.prompt_type == "prompt":
+                self.edit_prompt.setPlainText(task.prompt)
                 self.edit_slash_command.clear()
             else:
-                self.edit_slash_command.setText(task.command)
+                self.edit_slash_command.setText(task.prompt)
                 self.edit_prompt.clear()
 
             # Set schedule type and panel config
@@ -734,8 +734,8 @@ class TaskEditorPanel(QFrame):
             self.current_task.job_id = job_id
             self.current_task.session_mode = self.edit_session.currentText()
             # NOTE: working_directory now inherited from Job
-            self.current_task.command_type = command_type
-            self.current_task.command = command_value
+            self.current_task.prompt_type = command_type
+            self.current_task.prompt = command_value
             self.current_task.schedule = schedule
             self.current_task.retry = retry_config
             self.current_task.notifications = notification_config
@@ -754,8 +754,8 @@ class TaskEditorPanel(QFrame):
                 profile=profile_id,
                 job_id=job_id,
                 session_mode=self.edit_session.currentText(),
-                command_type=command_type,
-                command=command_value,
+                prompt_type=command_type,
+                prompt=command_value,
                 schedule=schedule,
                 retry=retry_config,
                 notifications=notification_config,

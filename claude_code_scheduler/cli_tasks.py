@@ -136,7 +136,7 @@ def get(task_id: str, api_url: str, verbose: int) -> None:
         Returns complete task configuration as JSON including:
         - id: Unique identifier
         - name: Task name
-        - command: Command to execute
+        - prompt: The prompt text for Claude Code
         - model: AI model
         - profile: Environment profile
         - enabled: Whether task is enabled
@@ -162,11 +162,18 @@ def get(task_id: str, api_url: str, verbose: int) -> None:
         raise click.ClickException(str(e))
 
 
+# Well-known profile IDs for shortcuts
+ZAI_PROFILE_ID = "5270805b-3731-41da-8710-fe765f2e58be"
+BEDROCK_PROFILE_ID = "9e4eaa7d-ba4e-44c0-861a-712aa75382d1"
+
+
 @tasks.command()
 @click.option("--name", required=True, help="Task name")
-@click.option("--command", required=True, help="Command to execute")
+@click.option("--prompt", required=True, help="The prompt text for Claude Code")
 @click.option("--model", help="AI model to use (default: claude-3-5-sonnet-20241022)")
-@click.option("--profile", required=True, help="Environment profile ID (required)")
+@click.option("--profile", help="Environment profile ID")
+@click.option("--zai", "use_zai", is_flag=True, help="Use ZAI profile (shortcut)")
+@click.option("--bedrock", "use_bedrock", is_flag=True, help="Use Bedrock profile (shortcut)")
 @click.option("--job", "job_id", help="Job ID to assign task to (inherits working dir)")
 @click.option("--permissions", help="Task permissions (comma-separated)")
 @click.option("--enabled", is_flag=True, default=True, help="Enable task (default: enabled)")
@@ -179,9 +186,11 @@ def get(task_id: str, api_url: str, verbose: int) -> None:
 @click.option("-v", "--verbose", count=True, help="Enable verbose output")
 def create(
     name: str,
-    command: str,
+    prompt: str,
     model: str | None,
-    profile: str,
+    profile: str | None,
+    use_zai: bool,
+    use_bedrock: bool,
     job_id: str | None,
     permissions: str | None,
     enabled: bool,
@@ -198,42 +207,42 @@ def create(
     Examples:
 
     \b
-        # Create a task (profile is required)
-        claude-code-scheduler tasks create \\
-            --name "Daily Backup" \\
-            --command "backup.sh" \\
-            --profile <profile-id>
-
-    \b
-        # Create task assigned to a job (inherits working directory)
+        # Create task with ZAI profile shortcut (recommended)
         claude-code-scheduler tasks create \\
             --name "Code Review" \\
-            --command "claude-code review --all" \\
-            --profile <profile-id> \\
+            --prompt "Review the code for security issues" \\
+            --zai \\
             --job <job-id>
+
+    \b
+        # Create task with Bedrock profile
+        claude-code-scheduler tasks create \\
+            --name "Code Review" \\
+            --prompt "Review the code" \\
+            --bedrock \\
+            --job <job-id>
+
+    \b
+        # Create task with explicit profile
+        claude-code-scheduler tasks create \\
+            --name "Daily Backup" \\
+            --prompt "Create a backup of the database" \\
+            --profile <profile-id>
 
     \b
         # Create task with all options
         claude-code-scheduler tasks create \\
             --name "Code Review" \\
-            --command "claude-code review --all" \\
+            --prompt "Review code and fix issues" \\
             --model "claude-3-5-sonnet-20241022" \\
             --profile <profile-id> \\
             --job <job-id> \\
-            --permissions "read,write" \\
+            --permissions "bypass" \\
             --enabled \\
             --commit-on-success
 
     \b
-        # Create task without auto-commit
-        claude-code-scheduler tasks create \\
-            --name "Test Run" \\
-            --command "test.sh" \\
-            --profile <profile-id> \\
-            --no-commit-on-success
-
-    \b
-        # List available profiles first
+        # List available profiles
         claude-code-scheduler profiles list
 
     \b
@@ -243,13 +252,29 @@ def create(
     """
     setup_logging(verbose)
 
-    # Build task data (profile is always included since it's required)
+    # Resolve profile from shortcuts or explicit --profile
+    resolved_profile: str | None = profile
+    if use_zai and use_bedrock:
+        click.echo("Error: Cannot use both --zai and --bedrock. Choose one.", err=True)
+        raise click.ClickException("Conflicting profile options")
+    elif use_zai:
+        resolved_profile = ZAI_PROFILE_ID
+        logger.debug("Using ZAI profile shortcut: %s", resolved_profile)
+    elif use_bedrock:
+        resolved_profile = BEDROCK_PROFILE_ID
+        logger.debug("Using Bedrock profile shortcut: %s", resolved_profile)
+
+    if not resolved_profile:
+        click.echo("Error: Profile is required. Use --profile <id>, --zai, or --bedrock.", err=True)
+        raise click.ClickException("Profile is required")
+
+    # Build task data
     # NOTE: working_directory is inherited from Job, not set on Task
     task_data: dict[str, object] = {
         "name": name,
-        "command": command,
+        "prompt": prompt,
         "enabled": enabled,
-        "profile": profile,
+        "profile": resolved_profile,
         "commit_on_success": commit_on_success,
     }
 
@@ -276,7 +301,7 @@ def create(
 @tasks.command()
 @click.argument("task_id")
 @click.option("--name", help="Update task name")
-@click.option("--command", help="Update command")
+@click.option("--prompt", help="Update prompt text")
 @click.option("--model", help="Update AI model")
 @click.option("--profile", help="Update environment profile")
 @click.option("--job", "job_id", help="Assign to job (use 'none' to unassign)")
@@ -292,7 +317,7 @@ def create(
 def update(
     task_id: str,
     name: str | None,
-    command: str | None,
+    prompt: str | None,
     model: str | None,
     profile: str | None,
     job_id: str | None,
@@ -318,6 +343,11 @@ def update(
         claude-code-scheduler tasks update task-id --name "New Name"
 
     \b
+        # Update prompt text
+        claude-code-scheduler tasks update task-id \\
+            --prompt "New prompt for Claude Code"
+
+    \b
         # Assign task to a job (inherits working directory)
         claude-code-scheduler tasks update task-id --job <job-id>
 
@@ -328,7 +358,7 @@ def update(
     \b
         # Update multiple fields
         claude-code-scheduler tasks update task-id \\
-            --command "new-command.sh" \\
+            --prompt "New prompt text" \\
             --model "claude-3-5-sonnet-20241022" \\
             --enabled \\
             --commit-on-success
@@ -351,8 +381,8 @@ def update(
 
     if name is not None:
         update_data["name"] = name
-    if command is not None:
-        update_data["command"] = command
+    if prompt is not None:
+        update_data["prompt"] = prompt
     if model is not None:
         update_data["model"] = model
     if profile is not None:

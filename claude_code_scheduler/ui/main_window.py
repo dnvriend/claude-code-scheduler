@@ -44,6 +44,7 @@ Note:
     and has been reviewed and tested by a human.
 """
 
+import json
 from pathlib import Path
 from uuid import UUID
 
@@ -72,6 +73,7 @@ from claude_code_scheduler.services.applescript_service import AppleScriptServic
 from claude_code_scheduler.services.debug_server import DebugServer
 from claude_code_scheduler.services.env_resolver import EnvVarResolver
 from claude_code_scheduler.services.export_service import ExportService
+from claude_code_scheduler.services.import_service import ImportService
 from claude_code_scheduler.services.iterm_service import ITermService
 from claude_code_scheduler.services.sequential_scheduler import (
     SequentialScheduler,
@@ -198,6 +200,7 @@ class MainWindow(QMainWindow):
             job_tasks_provider=self._api_get_job_tasks,
             job_run_provider=self._api_run_job,
             job_stop_provider=self._api_stop_job,
+            job_import_provider=self._api_import_job,
         )
 
         # Initialize environment resolver and iTerm service
@@ -282,6 +285,11 @@ class MainWindow(QMainWindow):
         export_job_action.setShortcut(QKeySequence("Ctrl+E"))
         export_job_action.triggered.connect(self._on_export_job)
         job_menu.addAction(export_job_action)
+
+        import_job_action = QAction("&Import Job...", self)
+        import_job_action.setShortcut(QKeySequence("Ctrl+I"))
+        import_job_action.triggered.connect(self._on_import_job)
+        job_menu.addAction(import_job_action)
 
         # View menu
         view_menu = QMenu("&View", self)
@@ -421,6 +429,122 @@ class MainWindow(QMainWindow):
             # Handle unexpected errors
             QMessageBox.critical(self, "Export Failed", f"An unexpected error occurred: {e}")
             logger.error("Unexpected export error for job %s: %s", job_id, e)
+
+    def _on_import_job(self) -> None:
+        """Import a job from a JSON file."""
+        # Show file open dialog
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "Import Job", "", "JSON Files (*.json);;All Files (*)"
+        )
+
+        if not file_path:  # User cancelled
+            return
+
+        try:
+            # Import job using import service
+            import_service = ImportService(self.storage)
+            input_path = Path(file_path)
+
+            # Perform initial validation (don't import yet)
+
+            # Load and parse JSON for validation only
+            try:
+                with open(input_path, encoding="utf-8") as f:
+                    data = json.load(f)
+            except json.JSONDecodeError as e:
+                msg = f"The file contains invalid JSON:\n\n{e}"
+                QMessageBox.critical(self, "Invalid JSON", msg)
+                logger.error("Invalid JSON in import file %s: %s", input_path, e)
+                return
+            except OSError as e:
+                QMessageBox.critical(self, "File Read Error", f"Failed to read the file:\n\n{e}")
+                logger.error("Failed to read import file %s: %s", input_path, e)
+                return
+
+            # Validate the data structure
+            validation_result = import_service.validate_import(data)
+
+            if not validation_result.success:
+                # Show validation errors
+                error_msg = "Import validation failed:\n\n" + "\n".join(validation_result.errors)
+                QMessageBox.critical(self, "Import Failed", error_msg)
+                logger.error(
+                    "Import validation failed for %s: %s",
+                    input_path,
+                    validation_result.errors,
+                )
+                return
+
+            # Check for warnings or conflicts
+            force_import = False
+            if validation_result.warnings:
+                # Create warning message
+                warning_msg = "The following warnings were detected during import:\n\n"
+                warning_msg += "\n".join(f"• {warning}" for warning in validation_result.warnings)
+                warning_msg += "\n\nDo you want to continue with the import?"
+
+                # Show warning dialog
+                reply = QMessageBox.question(
+                    self,
+                    "Import Warnings",
+                    warning_msg,
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No,
+                )
+
+                if reply != QMessageBox.StandardButton.Yes:
+                    logger.info("User cancelled import due to warnings")
+                    return
+
+                # If warnings include job conflicts, set force flag
+                if any("already exists" in warning for warning in validation_result.warnings):
+                    force_import = True
+
+            # Perform the actual import
+            import_result = import_service.import_job(input_path, force=force_import)
+
+            if import_result.success and import_result.job:
+                # Show success message
+                success_msg = f"Job '{import_result.job.name}' imported successfully!"
+                if import_result.tasks:
+                    success_msg += f"\n\n{len(import_result.tasks)} tasks imported."
+                if import_result.warnings:
+                    success_msg += f"\n\n{len(import_result.warnings)} warnings during import."
+
+                QMessageBox.information(self, "Import Successful", success_msg)
+                logger.info(
+                    "Successfully imported job '%s' with %d tasks from %s",
+                    import_result.job.name,
+                    len(import_result.tasks),
+                    input_path,
+                )
+
+                # Reload state from storage to sync with imported data
+                self.jobs = self.storage.load_jobs()
+                self.tasks = self.storage.load_tasks()
+
+                # Refresh UI to show new job
+                self._refresh_ui()
+
+            else:
+                # Show import errors
+                error_msg = "Import failed:\n\n" + "\n".join(import_result.errors)
+                QMessageBox.critical(self, "Import Failed", error_msg)
+                logger.error("Import failed for %s: %s", input_path, import_result.errors)
+
+        except FileNotFoundError:
+            QMessageBox.critical(self, "File Not Found", f"The file {file_path} was not found.")
+            logger.error("Import file not found: %s", file_path)
+
+        except OSError as e:
+            # Handle file I/O errors
+            QMessageBox.critical(self, "Import Failed", f"Failed to read import file: {e}")
+            logger.error("File read failed for %s: %s", file_path, e)
+
+        except Exception as e:
+            # Handle unexpected errors
+            QMessageBox.critical(self, "Import Failed", f"An unexpected error occurred: {e}")
+            logger.error("Unexpected import error for %s: %s", file_path, e)
 
     def _on_run_job_requested(self, job_id: UUID) -> None:
         """Handle run job request from UI - start sequential task execution."""
@@ -654,8 +778,8 @@ class MainWindow(QMainWindow):
                     model=task.model,
                     permissions=task.permissions,
                     session_mode=task.session_mode,
-                    command_type=task.command_type,
-                    command=task.command,
+                    prompt_type=task.prompt_type,
+                    prompt=task.prompt,
                     schedule=task.schedule,
                     enabled=False,  # Start disabled
                     retry=task.retry,
@@ -682,8 +806,22 @@ class MainWindow(QMainWindow):
                 self._file_watcher.unwatch_task(task_id)
                 del self.tasks[i]
                 self.storage.delete_task(task_id)
+                # Remove from job's task_order
+                self._remove_task_from_job_order(task_id)
                 self._refresh_ui()
                 self.task_editor_panel.clear()
+                break
+
+    def _remove_task_from_job_order(self, task_id: UUID) -> None:
+        """Remove a task from its job's task_order list.
+
+        Ensures task_order stays in sync when tasks are deleted.
+        """
+        for job in self.jobs:
+            if task_id in job.task_order:
+                job.task_order.remove(task_id)
+                self.storage.save_job(job)
+                logger.debug("Removed task %s from job %s task_order", task_id, job.id)
                 break
 
     # Job signal handlers
@@ -1067,8 +1205,8 @@ class MainWindow(QMainWindow):
 
         # g) Build claude command using AppleScript service
         command = self.applescript_service.build_claude_command(
-            task_command=task.command,
-            task_command_type=task.command_type,
+            task_command=task.prompt,
+            task_command_type=task.prompt_type,
             task_model=task.model,
             task_profile=str(task.profile) if task.profile else None,
             task_permissions=task.permissions,
@@ -1674,12 +1812,13 @@ class MainWindow(QMainWindow):
 
         try:
             # Validate required fields
+            # Support both 'prompt' (new) and 'command' (legacy) field names
             name = data.get("name")
-            command = data.get("command")
+            prompt = data.get("prompt", data.get("command"))
             job_id_str = data.get("job_id")
 
-            if not name or not command:
-                return {"success": False, "error": "Missing required fields: name, command"}
+            if not name or not prompt:
+                return {"success": False, "error": "Missing required fields: name, prompt"}
 
             # Validate job_id is required and must reference existing job
             if not job_id_str:
@@ -1817,14 +1956,15 @@ class MainWindow(QMainWindow):
 
             # Create task with all fields
             # NOTE: working_directory is inherited from Job, not set on Task
+            # Support both 'prompt_type' (new) and 'command_type' (legacy) field names
             task = Task(
                 name=str(name),
                 job_id=job_id,
                 model=str(data.get("model", "sonnet")),
                 permissions=str(data.get("permissions", "bypass")),
                 session_mode=str(data.get("session_mode", "new")),
-                command_type=str(data.get("command_type", "prompt")),
-                command=str(command),
+                prompt_type=str(data.get("prompt_type", data.get("command_type", "prompt"))),
+                prompt=str(prompt),
                 schedule=schedule,
                 enabled=bool(data.get("enabled", False)),
                 commit_on_success=bool(data.get("commit_on_success", True)),
@@ -1899,10 +2039,13 @@ class MainWindow(QMainWindow):
                 return {"success": False, "error": f"Task not found: {task_id}"}
 
             # Update simple fields if provided
+            # Support both 'prompt' (new) and 'command' (legacy) field names
             if "name" in data:
                 task.name = str(data["name"])
-            if "command" in data:
-                task.command = str(data["command"])
+            if "prompt" in data:
+                task.prompt = str(data["prompt"])
+            elif "command" in data:  # Legacy support
+                task.prompt = str(data["command"])
             if "model" in data:
                 task.model = str(data["model"])
             if "permissions" in data:
@@ -1911,8 +2054,11 @@ class MainWindow(QMainWindow):
                 task.session_mode = str(data["session_mode"])
             # NOTE: working_directory is now on Job, not Task
             # Ignore working_directory in task update, use job_id instead
-            if "command_type" in data:
-                task.command_type = str(data["command_type"])
+            # Support both 'prompt_type' (new) and 'command_type' (legacy) field names
+            if "prompt_type" in data:
+                task.prompt_type = str(data["prompt_type"])
+            elif "command_type" in data:  # Legacy support
+                task.prompt_type = str(data["command_type"])
             if "enabled" in data:
                 task.enabled = bool(data["enabled"])
             if "commit_on_success" in data:
@@ -2050,6 +2196,8 @@ class MainWindow(QMainWindow):
                     self._file_watcher.unwatch_task(task_id)
                     del self.tasks[i]
                     self.storage.delete_task(task_id)
+                    # Remove from job's task_order
+                    self._remove_task_from_job_order(task_id)
                     # Emit signal for thread-safe UI refresh
                     self._signal_bridge.state_changed.emit()
                     logger.info("Task deleted via API: %s", task_id)
@@ -2688,6 +2836,89 @@ class MainWindow(QMainWindow):
         except Exception as e:
             logger.exception("Failed to stop job via API: %s", e)
             return {"success": False, "error": str(e)}
+
+    def _api_import_job(self, data: dict[str, object]) -> dict[str, object]:
+        """Import a job from file via REST API.
+
+        Args:
+            data: Dictionary containing file_path and optional force flag.
+
+        Returns:
+            Result dictionary with success status and error codes for HTTP mapping.
+        """
+        from pathlib import Path
+
+        from claude_code_scheduler.services.import_service import ImportService
+
+        try:
+            file_path = data.get("file_path")
+            if not file_path:
+                return {
+                    "success": False,
+                    "error_code": "INVALID_REQUEST",
+                    "message": "file_path is required",
+                }
+
+            force = data.get("force", False)
+            input_path = Path(str(file_path))
+
+            # Use import service
+            import_service = ImportService(self.storage)
+            result = import_service.import_job(input_path, force=bool(force))
+
+            if result.success and result.job:
+                # Reload state from storage to sync with imported data
+                self.jobs = self.storage.load_jobs()
+                self.tasks = self.storage.load_tasks()
+
+                # Emit signal for thread-safe UI refresh
+                self._signal_bridge.state_changed.emit()
+
+                logger.info(
+                    "Job imported via API: %s with %d tasks",
+                    result.job.name,
+                    len(result.tasks),
+                )
+                return {
+                    "success": True,
+                    "job": result.job.to_dict(),
+                    "tasks": [t.to_dict() for t in result.tasks],
+                    "warnings": result.warnings,
+                }
+
+            # Map errors to error codes for HTTP status mapping
+            error_msg = result.errors[0] if result.errors else "Import failed"
+
+            if "File not found" in error_msg:
+                error_code = "FILE_NOT_FOUND"
+            elif "already exists" in error_msg:
+                error_code = "JOB_EXISTS" if "Job with UUID" in error_msg else "TASK_EXISTS"
+            elif "Invalid JSON" in error_msg:
+                error_code = "INVALID_JSON"
+            elif "version" in error_msg.lower():
+                error_code = "VERSION_MISMATCH"
+            elif "not found" in error_msg and "Profile" in error_msg:
+                error_code = "PROFILE_NOT_FOUND"
+            elif "Missing" in error_msg or "Invalid" in error_msg:
+                error_code = "INVALID_SCHEMA"
+            else:
+                error_code = "UNKNOWN_ERROR"
+
+            return {
+                "success": False,
+                "error_code": error_code,
+                "message": error_msg,
+                "errors": result.errors,
+                "warnings": result.warnings,
+            }
+
+        except Exception as e:
+            logger.exception("Failed to import job via API: %s", e)
+            return {
+                "success": False,
+                "error_code": "UNKNOWN_ERROR",
+                "message": str(e),
+            }
 
     def _resolve_profile(self, profile_id: str) -> Profile | None:
         """Resolve a profile by its ID string.

@@ -91,8 +91,8 @@ def sample_tasks(sample_job: Job) -> list[Task]:
             model="sonnet",
             profile="task1-profile-uuid",
             schedule=schedule1,
-            command_type="prompt",
-            command="Review the code changes",
+            prompt_type="prompt",
+            prompt="Review the code changes",
             permissions="default",
             session_mode="new",
             allowed_tools=["read", "write"],
@@ -106,8 +106,8 @@ def sample_tasks(sample_job: Job) -> list[Task]:
             model="opus",
             profile=None,  # Test with no profile
             schedule=schedule2,
-            command_type="command",
-            command="run tests",
+            prompt_type="prompt",
+            prompt="run tests",
             permissions="restricted",
             session_mode="continue",
             allowed_tools=[],
@@ -135,7 +135,7 @@ class TestExportJobBasic:
         assert "exported_at" in result
         assert "job" in result
         assert "tasks" in result
-        assert "metadata" in result
+        assert "profiles_referenced" in result
 
         # Verify job data
         assert result["job"]["id"] == str(sample_job.id)
@@ -147,10 +147,8 @@ class TestExportJobBasic:
         # Verify tasks is empty
         assert result["tasks"] == []
 
-        # Verify metadata
-        assert result["metadata"]["total_tasks"] == 0
-        assert result["metadata"]["enabled_tasks"] == 0
-        assert result["metadata"]["job_status"] == sample_job.status.value
+        # Verify profiles_referenced contains job profile
+        assert sample_job.profile in result["profiles_referenced"]
 
         # Verify mock calls
         mock_storage.get_job.assert_called_once_with(sample_job.id)
@@ -192,9 +190,9 @@ class TestExportJobBasic:
         assert task2_data["model"] == "opus"
         assert task2_data["profile"] is None
 
-        # Verify metadata
-        assert result["metadata"]["total_tasks"] == 2
-        assert result["metadata"]["enabled_tasks"] == 1  # Only Task 1 is enabled
+        # Verify profiles_referenced contains profiles from job and tasks
+        assert len(result["tasks"]) == 2
+        assert "task1-profile-uuid" in result["profiles_referenced"]
 
     def test_export_job_with_profile_references(
         self,
@@ -277,7 +275,7 @@ class TestExportToFile:
             assert loaded_data["version"] == memory_export["version"]
             assert loaded_data["job"] == memory_export["job"]
             assert loaded_data["tasks"] == memory_export["tasks"]
-            assert loaded_data["metadata"] == memory_export["metadata"]
+            assert loaded_data["profiles_referenced"] == memory_export["profiles_referenced"]
 
             # Verify JSON structure
             assert isinstance(loaded_data, dict)
@@ -285,7 +283,7 @@ class TestExportToFile:
             assert "exported_at" in loaded_data
             assert "job" in loaded_data
             assert "tasks" in loaded_data
-            assert "metadata" in loaded_data
+            assert "profiles_referenced" in loaded_data
 
             # Verify timestamps are valid ISO format
             datetime.fromisoformat(loaded_data["exported_at"].replace("Z", "+00:00"))
@@ -354,13 +352,7 @@ class TestValidateExportData:
                     "updated_at": datetime.now(UTC).isoformat(),
                 }
             ],
-            "metadata": {
-                "total_tasks": 1,
-                "enabled_tasks": 1,
-                "job_status": "pending",
-                "created_at": datetime.now(UTC).isoformat(),
-                "updated_at": datetime.now(UTC).isoformat(),
-            },
+            "profiles_referenced": ["test-profile-uuid"],
         }
 
         assert export_service.validate_export_data(valid_data) is True
@@ -387,7 +379,7 @@ class TestValidateExportData:
                 # Missing required job fields
             },
             "tasks": [],
-            "metadata": {},
+            "profiles_referenced": [],
         }
 
         assert export_service.validate_export_data(invalid_data) is False
@@ -407,7 +399,7 @@ class TestValidateExportData:
                 "updated_at": datetime.now(UTC).isoformat(),
             },
             "tasks": "not_a_list",  # Should be a list
-            "metadata": {},
+            "profiles_referenced": [],
         }
 
         assert export_service.validate_export_data(invalid_data) is False
@@ -485,8 +477,8 @@ class TestRoundTripImportExport:
                 "model",
                 "profile",
                 "schedule",
-                "command_type",
-                "command",
+                "prompt_type",
+                "prompt",
                 "permissions",
                 "session_mode",
                 "allowed_tools",
@@ -544,7 +536,7 @@ class TestExportServiceIntegration:
         # Verify export structure
         assert result["job"]["id"] == str(sample_job.id)
         assert len(result["tasks"]) == len(sample_tasks)
-        assert result["metadata"]["total_tasks"] == len(sample_tasks)
+        assert "profiles_referenced" in result
 
         # Verify the exported data matches what we can load back
         loaded_job = real_storage.get_job(sample_job.id)

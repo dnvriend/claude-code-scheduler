@@ -179,14 +179,13 @@ claude-code-scheduler cli jobs delete <job-id> --force
 
 ```bash
 
-# Create task
+# Create task (use --zai or --bedrock shortcuts)
 
 claude-code-scheduler cli tasks create \
 --name "<kebab-case>" \
 --job "<job-id>" \
---command "<prompt-text>" \
---profile "<profile-id>" \
---working-directory "<path>"
+--prompt "<prompt-text>" \
+--zai
 
 # List tasks
 
@@ -256,6 +255,6 @@ Success criteria: make lint && make typecheck
 - Each task prompt must be SELF-CONTAINED (workers don't communicate)
 - Include ALL necessary context in each task's prompt
 - Specify EXACT output paths
-- Use ZAI profile: `5270805b-3731-41da-8710-fe765f2e58be`
+- Use `--zai` shortcut for ZAI profile or `--bedrock` for AWS Bedrock
 - Success criteria should be automatable (lint, typecheck)
 - Names use kebab-case derived from feature slug

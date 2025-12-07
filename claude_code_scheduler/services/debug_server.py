@@ -35,6 +35,7 @@ API Endpoints:
         - POST /api/tasks/{id}/run - Run task now
         - POST /api/runs/{id}/stop - Stop running task
         - POST /api/jobs/{id}/export - Export job and tasks to file
+        - POST /api/jobs/import - Import job from file
 
 Called By:
     - MainWindow.__init__: Creates and starts server
@@ -104,6 +105,7 @@ class DebugRequestHandler(BaseHTTPRequestHandler):
     job_stop_provider: Callable[[UUID], dict[str, Any]] | None = None
     job_export_provider: Callable[[UUID], dict[str, Any]] | None = None
     job_export_file_provider: Callable[[UUID, str], dict[str, Any]] | None = None
+    job_import_provider: Callable[[dict[str, Any]], dict[str, Any]] | None = None
     server_port: int = DEFAULT_DEBUG_PORT
 
     def log_message(self, format: str, *args: Any) -> None:
@@ -217,6 +219,9 @@ class DebugRequestHandler(BaseHTTPRequestHandler):
         # POST /api/jobs - Create job
         elif self.path == "/api/jobs":
             self._handle_job_create()
+        # POST /api/jobs/import - Import job from file
+        elif self.path == "/api/jobs/import":
+            self._handle_job_import()
         # POST /api/jobs/{id}/export - Export job and tasks to file
         elif self.path.startswith("/api/jobs/") and self.path.endswith("/export"):
             job_id = self._extract_job_id("/export")
@@ -631,6 +636,50 @@ class DebugRequestHandler(BaseHTTPRequestHandler):
 
         result = self.job_export_file_provider(job_id, output_path)
         self._send_json(result)
+
+    def _handle_job_import(self) -> None:
+        """Handle POST /api/jobs/import - import job from file."""
+        if not self.job_import_provider:
+            self._send_error(501, "Job import not available")
+            return
+
+        body = self._read_json_body()
+        if body is None:
+            return
+
+        file_path = body.get("file_path")
+        if not file_path:
+            self._send_error(400, "file_path is required in request body")
+            return
+
+        if not isinstance(file_path, str):
+            self._send_error(400, "file_path must be a string")
+            return
+
+        force = body.get("force", False)
+        if not isinstance(force, bool):
+            self._send_error(400, "force must be a boolean")
+            return
+
+        result = self.job_import_provider({"file_path": file_path, "force": force})
+
+        # Handle different HTTP status codes based on result
+        if not result.get("success", False):
+            error_code = result.get("error_code", "UNKNOWN_ERROR")
+            message = result.get("message", "Import failed")
+
+            if error_code == "FILE_NOT_FOUND":
+                self._send_error(404, message)
+            elif error_code == "JOB_EXISTS":
+                self._send_error(409, message)
+            elif error_code in ["INVALID_JSON", "INVALID_SCHEMA", "VERSION_MISMATCH"]:
+                self._send_error(400, message)
+            elif error_code == "PROFILE_NOT_FOUND":
+                self._send_error(422, message)
+            else:
+                self._send_error(500, message)
+        else:
+            self._send_json(result)
 
     def _get_openapi_spec(self) -> dict[str, Any]:
         """Get OpenAPI 3.0 specification for this API."""
@@ -1691,6 +1740,91 @@ class DebugRequestHandler(BaseHTTPRequestHandler):
                         },
                     },
                 },
+                "/api/jobs/import": {
+                    "post": {
+                        "tags": ["jobs"],
+                        "summary": "Import job from file",
+                        "description": "Import job and tasks from a JSON file",
+                        "operationId": "importJob",
+                        "requestBody": {
+                            "required": True,
+                            "content": {
+                                "application/json": {
+                                    "schema": {
+                                        "type": "object",
+                                        "properties": {
+                                            "file_path": {
+                                                "type": "string",
+                                                "description": "Path to JSON file to import",
+                                            },
+                                            "force": {
+                                                "type": "boolean",
+                                                "description": (
+                                                    "Overwrite existing job if UUID conflict"
+                                                ),
+                                                "default": False,
+                                            },
+                                        },
+                                        "required": ["file_path"],
+                                    }
+                                }
+                            },
+                        },
+                        "responses": {
+                            "200": {
+                                "description": "Job imported successfully",
+                                "content": {
+                                    "application/json": {
+                                        "schema": {
+                                            "type": "object",
+                                            "properties": {
+                                                "success": {"type": "boolean"},
+                                                "job": {"type": "object"},
+                                                "tasks_imported": {"type": "integer"},
+                                                "warnings": {
+                                                    "type": "array",
+                                                    "items": {"type": "string"},
+                                                },
+                                            },
+                                        }
+                                    }
+                                },
+                            },
+                            "400": {
+                                "description": "Invalid JSON or validation failed",
+                                "content": {
+                                    "application/json": {
+                                        "schema": {"$ref": "#/components/schemas/ErrorResponse"}
+                                    }
+                                },
+                            },
+                            "404": {
+                                "description": "File not found",
+                                "content": {
+                                    "application/json": {
+                                        "schema": {"$ref": "#/components/schemas/ErrorResponse"}
+                                    }
+                                },
+                            },
+                            "409": {
+                                "description": "Job UUID already exists",
+                                "content": {
+                                    "application/json": {
+                                        "schema": {"$ref": "#/components/schemas/ErrorResponse"}
+                                    }
+                                },
+                            },
+                            "422": {
+                                "description": "Profile not found",
+                                "content": {
+                                    "application/json": {
+                                        "schema": {"$ref": "#/components/schemas/ErrorResponse"}
+                                    }
+                                },
+                            },
+                        },
+                    }
+                },
                 "/api/scheduler": {
                     "get": {
                         "tags": ["state"],
@@ -1807,8 +1941,11 @@ class DebugRequestHandler(BaseHTTPRequestHandler):
                                 "enum": ["opus", "sonnet", "haiku"],
                                 "description": "Claude model to use",
                             },
-                            "command": {"type": "string", "description": "Prompt or slash command"},
-                            "command_type": {
+                            "prompt": {
+                                "type": "string",
+                                "description": "The prompt text or slash command",
+                            },
+                            "prompt_type": {
                                 "type": "string",
                                 "enum": ["prompt", "slash_command"],
                             },
@@ -1833,10 +1970,13 @@ class DebugRequestHandler(BaseHTTPRequestHandler):
                     },
                     "TaskCreate": {
                         "type": "object",
-                        "required": ["name", "command", "profile"],
+                        "required": ["name", "prompt", "profile"],
                         "properties": {
                             "name": {"type": "string", "description": "Task name"},
-                            "command": {"type": "string", "description": "Prompt or slash command"},
+                            "prompt": {
+                                "type": "string",
+                                "description": "The prompt text or slash command",
+                            },
                             "model": {
                                 "type": "string",
                                 "enum": ["opus", "sonnet", "haiku"],
@@ -1853,7 +1993,7 @@ class DebugRequestHandler(BaseHTTPRequestHandler):
                                 "enum": ["new", "reuse", "fork"],
                                 "default": "new",
                             },
-                            "command_type": {
+                            "prompt_type": {
                                 "type": "string",
                                 "enum": ["prompt", "slash_command"],
                                 "default": "prompt",
@@ -1894,7 +2034,7 @@ class DebugRequestHandler(BaseHTTPRequestHandler):
                         "description": "Partial update - only include fields to change",
                         "properties": {
                             "name": {"type": "string"},
-                            "command": {"type": "string"},
+                            "prompt": {"type": "string"},
                             "model": {
                                 "type": "string",
                                 "enum": ["opus", "sonnet", "haiku"],
@@ -2474,14 +2614,14 @@ class DebugRequestHandler(BaseHTTPRequestHandler):
                         "description": "Create a new task",
                         "body": {
                             "name": "string (required)",
-                            "command": "string (required)",
+                            "prompt": "string (required) - the prompt text for Claude Code",
                             "model": "string (default: sonnet)",
                             "enabled": "boolean (default: false)",
                             "job_id": "string (uuid, working dir from job)",
                             "schedule_type": "string (once|cron|interval|file_watch)",
                         },
                         "example": 'curl -X POST -H "Content-Type: application/json" '
-                        '-d \'{"name":"Test","command":"echo hello"}\' '
+                        '-d \'{"name":"Test","prompt":"Review the code"}\' '
                         f"http://127.0.0.1:{self.server_port}/api/tasks",
                     },
                     "PUT /api/tasks/{id}": {
@@ -2554,7 +2694,7 @@ class DebugRequestHandler(BaseHTTPRequestHandler):
             "usage": {
                 "list_tasks": f"curl http://127.0.0.1:{self.server_port}/api/tasks",
                 "create_task": f'curl -X POST -H "Content-Type: application/json" '
-                f'-d \'{{"name":"Test","command":"echo hi"}}\' '
+                f'-d \'{{"name":"Test","prompt":"Review the code"}}\' '
                 f"http://127.0.0.1:{self.server_port}/api/tasks",
                 "run_task": f"curl -X POST http://127.0.0.1:{self.server_port}"
                 "/api/tasks/{uuid}/run",
@@ -2608,6 +2748,7 @@ class DebugServer:
         job_stop_provider: Callable[[UUID], dict[str, Any]] | None = None,
         job_export_provider: Callable[[UUID], dict[str, Any]] | None = None,
         job_export_file_provider: Callable[[UUID, str], dict[str, Any]] | None = None,
+        job_import_provider: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
     ) -> None:
         """Initialize debug server.
 
@@ -2643,6 +2784,7 @@ class DebugServer:
             job_stop_provider: Callback to stop a running job.
             job_export_provider: Callback to export job and tasks as JSON.
             job_export_file_provider: Callback to export job and tasks to file.
+            job_import_provider: Callback to import job from file.
         """
         self.port = port
         # Read providers
@@ -2680,6 +2822,7 @@ class DebugServer:
         self.job_stop_provider = job_stop_provider
         self.job_export_provider = job_export_provider
         self.job_export_file_provider = job_export_file_provider
+        self.job_import_provider = job_import_provider
         self._server: HTTPServer | None = None
         self._thread: threading.Thread | None = None
 
@@ -2720,6 +2863,7 @@ class DebugServer:
         DebugRequestHandler.job_stop_provider = self.job_stop_provider
         DebugRequestHandler.job_export_provider = self.job_export_provider
         DebugRequestHandler.job_export_file_provider = self.job_export_file_provider
+        DebugRequestHandler.job_import_provider = self.job_import_provider
         DebugRequestHandler.server_port = self.port
 
         try:

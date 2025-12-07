@@ -39,7 +39,6 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
-from claude_code_scheduler._version import __version__
 from claude_code_scheduler.logging_config import get_logger
 from claude_code_scheduler.storage.config_storage import ConfigStorage
 
@@ -57,14 +56,22 @@ class ExportService:
         """
         self.storage = storage or ConfigStorage()
 
-    def export_job(self, job_id: UUID) -> dict[str, Any]:
+    def export_job(self, job_id: UUID, include_profiles: bool = False) -> dict[str, Any]:
         """Export job and its tasks to dictionary format.
 
         Args:
             job_id: UUID of the job to export.
+            include_profiles: If True, include profile definitions (not implemented yet).
 
         Returns:
-            Dictionary containing job data, tasks, and metadata.
+            Dictionary containing job data, tasks, and metadata in the format:
+            {
+                "version": "1.0",
+                "exported_at": "2025-12-01T10:00:00Z",
+                "job": {...},
+                "tasks": [...],
+                "profiles_referenced": [...]
+            }
 
         Raises:
             ValueError: If job is not found.
@@ -78,19 +85,21 @@ class ExportService:
 
         tasks = self.storage.get_tasks_for_job(job_id)
 
+        # Collect referenced profile IDs from job and tasks
+        profiles_referenced = set()
+        if job.profile:
+            profiles_referenced.add(job.profile)
+        for task in tasks:
+            if task.profile:
+                profiles_referenced.add(task.profile)
+
         # Build export data structure
         export_data = {
-            "version": __version__,
+            "version": "1.0",
             "exported_at": datetime.now(UTC).isoformat(),
             "job": job.to_dict(),
             "tasks": [task.to_dict() for task in tasks],
-            "metadata": {
-                "total_tasks": len(tasks),
-                "enabled_tasks": len([t for t in tasks if t.enabled]),
-                "job_status": job.status.value,
-                "created_at": job.created_at.isoformat(),
-                "updated_at": job.updated_at.isoformat(),
-            },
+            "profiles_referenced": sorted(list(profiles_referenced)),
         }
 
         logger.info(
@@ -143,7 +152,7 @@ class ExportService:
         Returns:
             True if valid, False otherwise.
         """
-        required_fields = {"version", "exported_at", "job", "tasks", "metadata"}
+        required_fields = {"version", "exported_at", "job", "tasks", "profiles_referenced"}
 
         if not required_fields.issubset(export_data.keys()):
             logger.warning(
@@ -173,6 +182,11 @@ class ExportService:
             if not task_fields.issubset(task.keys()):
                 logger.warning("Task %d missing required fields: %s", i, task_fields - task.keys())
                 return False
+
+        # Validate profiles_referenced is a list
+        if not isinstance(export_data["profiles_referenced"], list):
+            logger.warning("profiles_referenced field is not a list")
+            return False
 
         logger.debug("Export data validation passed")
         return True

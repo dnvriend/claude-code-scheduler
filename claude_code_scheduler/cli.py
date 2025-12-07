@@ -237,9 +237,9 @@ def debug_tasks() -> None:
         click.echo(f"     Schedule: {task.schedule.schedule_type.value}")
         click.echo(f"     Job ID: {task.job_id or '(none)'}")
         click.echo(f"     Profile: {task.profile or '(none)'}")
-        if task.command:
-            cmd_preview = task.command[:60] + "..." if len(task.command) > 60 else task.command
-            click.echo(f"     Command: {cmd_preview}")
+        if task.prompt:
+            prompt_preview = task.prompt[:60] + "..." if len(task.prompt) > 60 else task.prompt
+            click.echo(f"     Prompt: {prompt_preview}")
         click.echo()
 
 
@@ -310,7 +310,7 @@ def debug_task(task_id: str) -> None:
     click.echo(f"Job ID: {task.job_id or '(none)'}")
     click.echo(f"Profile: {task.profile or '(none)'}")
     click.echo(f"Last run status: {task.last_run_status or '(never run)'}")
-    click.echo(f"\nCommand:\n{task.command or '(no command)'}")
+    click.echo(f"\nPrompt:\n{task.prompt or '(no prompt)'}")
     click.echo("\nSchedule:")
     click.echo(f"  Type: {task.schedule.schedule_type.value}")
     if task.schedule.calendar_time:

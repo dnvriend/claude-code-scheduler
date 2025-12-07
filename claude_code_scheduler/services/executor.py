@@ -294,9 +294,9 @@ class TaskExecutor:
         if task.disallowed_tools:
             cmd.extend(["--disallowed-tools", ",".join(task.disallowed_tools)])
 
-        # Add the prompt/command
-        prompt = task.command or task.name
-        cmd.append(prompt)
+        # Add the prompt text
+        prompt_text = task.prompt or task.name
+        cmd.append(prompt_text)
 
         # Set working directory (from Job, or default to ~/projects)
         wd_path = working_directory or "~/projects"
@@ -692,7 +692,7 @@ class TaskExecutor:
                     "type": "assistant",
                     "message": {
                         "role": "assistant",
-                        "content": f"I'll help you with: {task.command or task.name}",
+                        "content": f"I'll help you with: {task.prompt or task.name}",
                     },
                 }
             )

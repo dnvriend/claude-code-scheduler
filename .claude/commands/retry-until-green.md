@@ -91,10 +91,9 @@ EOF
         -H "Content-Type: application/json" \
         -d '{
             "name": "retry-attempt-'$ATTEMPT'-'$(date +%s)'",
-            "command": "'"$(echo "$WORKER_PROMPT" | sed 's/"/\\"/g' | tr '\n' ' ')"'",
+            "prompt": "'"$(echo "$WORKER_PROMPT" | sed 's/"/\\"/g' | tr '\n' ' ')"'",
             "model": "sonnet",
             "profile": "5270805b-3731-41da-8710-fe765f2e58be",
-            "working_directory": "'$(pwd)'",
             "permissions": "bypass",
             "schedule": {"schedule_type": "manual"},
             "enabled": false

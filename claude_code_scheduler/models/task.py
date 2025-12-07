@@ -106,11 +106,11 @@ class Task:
     model: str = "sonnet"  # opus | sonnet | haiku
     profile: str | None = None  # Profile ID (None = default/no profile)
     schedule: ScheduleConfig = field(default_factory=ScheduleConfig)
-    command_type: str = "prompt"  # "prompt" | "slash_command"
-    command: str = ""  # The prompt text or slash command
+    prompt_type: str = "prompt"  # "prompt" | "slash_command"
+    prompt: str = ""  # The prompt text or slash command
     # NOTE: working_directory moved to Job.working_directory
     # Tasks inherit working directory from their parent Job
-    permissions: str = "default"  # default | bypass | acceptEdits | plan
+    permissions: str = "bypass"  # default | bypass | acceptEdits | plan
     session_mode: str = "new"  # "new" | "reuse" | "fork"
     last_session_id: UUID | None = None  # Session ID from last run
     allowed_tools: list[str] = field(default_factory=list)
@@ -153,8 +153,8 @@ class Task:
                 "seq_max_retries": self.schedule.seq_max_retries,
                 "seq_retry_delay_seconds": self.schedule.seq_retry_delay_seconds,
             },
-            "command_type": self.command_type,
-            "command": self.command,
+            "prompt_type": self.prompt_type,
+            "prompt": self.prompt,
             "permissions": self.permissions,
             "session_mode": self.session_mode,
             "last_session_id": (str(self.last_session_id) if self.last_session_id else None),
@@ -231,8 +231,9 @@ class Task:
             model=data.get("model", "sonnet"),
             profile=data.get("profile"),
             schedule=schedule,
-            command_type=data.get("command_type", "prompt"),
-            command=data.get("command", ""),
+            # Support both old 'command' and new 'prompt' field names for backward compatibility
+            prompt_type=data.get("prompt_type", data.get("command_type", "prompt")),
+            prompt=data.get("prompt", data.get("command", "")),
             # NOTE: working_directory ignored - migrated to Job
             permissions=data.get("permissions", "default"),
             session_mode=data.get("session_mode", "new"),

@@ -108,7 +108,7 @@ class ConfigStorage:
             Task(
                 name="Daily Code Review",
                 model="sonnet",
-                command="Review recent git commits and summarize changes",
+                prompt="Review recent git commits and summarize changes",
                 # NOTE: working_directory is now on Job, not Task
                 schedule=ScheduleConfig(
                     schedule_type=ScheduleType.CALENDAR,
@@ -120,7 +120,7 @@ class ConfigStorage:
             Task(
                 name="Weekly Test Report",
                 model="sonnet",
-                command="Run tests and generate a summary report",
+                prompt="Run tests and generate a summary report",
                 # NOTE: working_directory is now on Job, not Task
                 schedule=ScheduleConfig(
                     schedule_type=ScheduleType.CALENDAR,
@@ -133,7 +133,7 @@ class ConfigStorage:
             Task(
                 name="On-Demand Analysis",
                 model="opus",
-                command="Analyze the codebase and suggest improvements",
+                prompt="Analyze the codebase and suggest improvements",
                 # NOTE: working_directory is now on Job, not Task
                 schedule=ScheduleConfig(schedule_type=ScheduleType.MANUAL),
                 enabled=True,

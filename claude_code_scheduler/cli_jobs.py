@@ -678,3 +678,180 @@ def list_tasks(ctx: click.Context, api_url: str, job_id: str, output: str) -> No
     except Exception as e:
         logger.error("Unexpected error: %s", e)
         sys.exit(1)
+
+
+@jobs.command("import")
+@api_url_option
+@click.option(
+    "--input",
+    "-i",
+    required=True,
+    help="Input file path for the JSON export to import (required)",
+)
+@click.option(
+    "--force",
+    "-f",
+    is_flag=True,
+    help="Overwrite existing job if UUID conflict",
+)
+@click.pass_context
+def import_job(ctx: click.Context, api_url: str, input: str, force: bool) -> None:
+    """Import a job with all associated tasks from a JSON file.
+
+    Imports a complete job with all its tasks from a previously exported JSON file.
+    Handles UUID conflicts, validates profile references, and provides clear error messages.
+
+    Examples:
+
+    \b
+        # Import job from file
+        claude-code-scheduler cli jobs import --input ~/exports/my-job.json
+
+    \b
+        # Force overwrite existing job
+        claude-code-scheduler cli jobs import -i ./backup.json --force
+
+    \b
+        # Import with verbose output
+        claude-code-scheduler cli jobs import -i ./job.json -v
+
+    \b
+        # Import from relative path
+        claude-code-scheduler cli jobs import --input ./exports/daily-maintenance.json
+
+    \b
+    Output Format:
+        Returns JSON with import status and details:
+        {"status": "success", "job": {...}, "tasks_imported": 5, "warnings": [...]}
+
+    Error Responses:
+        • Job UUID already exists: Use --force to overwrite
+        • Profile not found: Warning shown, import continues
+        • File not found: Check the input path
+        • Invalid JSON: Verify export file format
+    """
+    _verbose = ctx.obj.get("verbose", 0)  # noqa: F841
+
+    # Expand the input path (handles ~, environment variables, etc.)
+    expanded_input_path = os.path.expanduser(input)
+    expanded_input_path = os.path.expandvars(expanded_input_path)
+    logger.debug("Expanded input path: %s -> %s", input, expanded_input_path)
+
+    try:
+        with SchedulerClient(api_url) as client:
+            logger.debug("Importing job from %s (force=%s)", expanded_input_path, force)
+
+            # Call the import API endpoint with file path and force flag
+            request_data = {"file_path": expanded_input_path, "force": force}
+            response = client.post("/api/jobs/import", data=request_data)
+
+            # Check response status and display appropriate output
+            if response.get("status") == "success":
+                job_data = response.get("job", {})
+                job_name = job_data.get("name", "Unknown")
+                job_id = job_data.get("id", "unknown")
+                tasks_count = response.get("tasks_imported", 0)
+                warnings = response.get("warnings", [])
+
+                # Display success message
+                click.echo(f'Imported job "{job_name}" ({job_id[:8]}...)')
+                click.echo(f"  - {tasks_count} tasks imported")
+
+                # Display warnings prominently if any
+                if warnings:
+                    click.echo("\n⚠️  Warnings:", err=True)
+                    for warning in warnings:
+                        click.echo(f"  • {warning}", err=True)
+
+                # Display full response in verbose mode
+                if _verbose >= 2:
+                    click.echo("\nFull response:")
+                    click.echo(json.dumps(response, indent=2))
+                elif _verbose >= 1:
+                    click.echo(f"\nImport completed successfully. Warnings: {len(warnings)}")
+
+                logger.info(
+                    "Imported job %s with %d tasks from %s",
+                    job_name,
+                    tasks_count,
+                    expanded_input_path,
+                )
+
+            else:
+                # Display error response
+                error_message = response.get("message", "Unknown error")
+                error_code = response.get("error_code", "UNKNOWN")
+                details = response.get("details", {})
+
+                click.echo(f"Error: {error_message}", err=True)
+
+                # Show additional details for specific error codes
+                if error_code == "JOB_EXISTS":
+                    existing_name = details.get("existing_job_name", "Unknown")
+                    click.echo(f'  Existing job: "{existing_name}"', err=True)
+                    click.echo("  Use --force to overwrite existing job.", err=True)
+                elif error_code == "PROFILE_NOT_FOUND":
+                    available_profiles = details.get("available_profiles", [])
+                    if available_profiles:
+                        click.echo(
+                            f"  Available profiles: {', '.join(available_profiles)}", err=True
+                        )
+                elif error_code == "INVALID_SCHEMA":
+                    missing_fields = details.get("missing_fields", [])
+                    if missing_fields:
+                        click.echo(
+                            f"  Missing required fields: {', '.join(missing_fields)}", err=True
+                        )
+
+                # Display full response in verbose mode
+                if _verbose >= 2:
+                    click.echo("\nFull error response:")
+                    click.echo(json.dumps(response, indent=2), err=True)
+
+                logger.error("Import failed: %s", error_message)
+                sys.exit(1)
+
+    except SchedulerAPIError as e:
+        if e.status_code == 404:
+            logger.error("Import endpoint not found or file not found: %s", e)
+            click.echo("Error: Import service not available or file not found.", err=True)
+        elif e.status_code == 400:
+            logger.error("Invalid request or malformed JSON: %s", e)
+            click.echo("Error: Invalid JSON format in export file.", err=True)
+        elif e.status_code == 409:
+            logger.error("Job UUID conflict: %s", e)
+            click.echo("Error: Job already exists. Use --force to overwrite.", err=True)
+        elif e.status_code == 422:
+            logger.error("Validation error: %s", e)
+            click.echo("Error: Profile references are invalid.", err=True)
+        else:
+            logger.error("Import API error: %s", e)
+            click.echo(f"Error: Failed to import job (HTTP {e.status_code}).", err=True)
+
+        # Display full error in verbose mode
+        if _verbose >= 2 and hasattr(e, "response") and e.response:
+            try:
+                error_data = json.loads(e.response)
+                click.echo("\nFull error response:")
+                click.echo(json.dumps(error_data, indent=2), err=True)
+            except (json.JSONDecodeError, AttributeError):
+                click.echo(f"\nRaw error response: {e.response}", err=True)
+
+        sys.exit(1)
+
+    except FileNotFoundError:
+        logger.error("Import file not found: %s", expanded_input_path)
+        click.echo(f"Error: Import file not found: {expanded_input_path}", err=True)
+        click.echo("Check that the file path is correct and the file exists.", err=True)
+        sys.exit(1)
+
+    except json.JSONDecodeError as e:
+        logger.error("Invalid JSON in import file: %s", e)
+        click.echo("Error: Invalid JSON format in export file.", err=True)
+        click.echo(f"JSON parsing error: {str(e)}", err=True)
+        sys.exit(1)
+
+    except Exception as e:
+        logger.error("Unexpected import error: %s", e)
+        click.echo(f"Error: Unexpected error during import: {str(e)}", err=True)
+        sys.exit(1)

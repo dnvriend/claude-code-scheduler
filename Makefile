@@ -50,7 +50,7 @@ run: ## Run claude-code-scheduler (usage: make run ARGS="...")
 	uv run claude-code-scheduler $(ARGS)
 
 build: ## Build package
-	uv build
+	uv build --force-pep517
 
 release: build ## Build and upload to S3 releases directory
 	@VERSION=$$(sed -n 's/__version__ = "\([^"]*\)"/\1/p' $(VERSION_FILE)); \

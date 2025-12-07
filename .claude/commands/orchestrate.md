@@ -86,15 +86,14 @@ ${task.context_files}
 EOF
 )
 
-        # Create task via API
+        # Create task via API (uses 'prompt' field)
         TASK_RESPONSE=$(curl -s -X POST http://127.0.0.1:5679/api/tasks \
             -H "Content-Type: application/json" \
             -d '{
                 "name": "worker-${task.id}-${worker_id}-$(date +%s)",
-                "command": "'"${WORKER_PROMPT}"'",
+                "prompt": "'"${WORKER_PROMPT}"'",
                 "model": "sonnet",
                 "profile": "5270805b-3731-41da-8710-fe765f2e58be",
-                "working_directory": "'$(pwd)'",
                 "permissions": "bypass",
                 "schedule": {"schedule_type": "manual"},
                 "enabled": false
