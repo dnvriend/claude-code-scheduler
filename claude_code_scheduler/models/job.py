@@ -138,7 +138,11 @@ class Job:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Job:
-        """Create job from dictionary."""
+        """Create job from dictionary.
+
+        For new jobs (creation), id/created_at/updated_at are optional and will
+        be auto-generated. For existing jobs (loading), all fields are expected.
+        """
         task_order_raw = data.get("task_order", [])
         task_order = [UUID(tid) for tid in task_order_raw]
 
@@ -149,13 +153,19 @@ class Job:
         else:
             working_directory = JobWorkingDirectory()
 
+        # Generate defaults for new jobs (id, timestamps)
+        job_id = UUID(data["id"]) if "id" in data else uuid4()
+        now = datetime.now()
+        created_at = datetime.fromisoformat(data["created_at"]) if "created_at" in data else now
+        updated_at = datetime.fromisoformat(data["updated_at"]) if "updated_at" in data else now
+
         return cls(
-            id=UUID(data["id"]),
+            id=job_id,
             name=data.get("name", "Untitled Job"),
             description=data.get("description", ""),
             status=JobStatus(data.get("status", "pending")),
-            created_at=datetime.fromisoformat(data["created_at"]),
-            updated_at=datetime.fromisoformat(data["updated_at"]),
+            created_at=created_at,
+            updated_at=updated_at,
             profile=data.get("profile"),
             working_directory=working_directory,
             task_order=task_order,

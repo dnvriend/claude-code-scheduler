@@ -827,13 +827,12 @@ class TestImportErrorConditions:
         self, import_service: ImportService, mock_storage: Mock
     ) -> None:
         """Test handling of data parsing errors."""
-        # Create data that will fail Job.from_dict()
+        # Create data that will fail Job.from_dict() - invalid UUID format
         invalid_data = {
             "version": "1.0",
             "job": {
-                "id": str(uuid4()),
+                "id": "not-a-valid-uuid",  # Invalid UUID format
                 "name": "Test Job",
-                # Missing required fields for Job.from_dict()
             },
             "tasks": [],
         }
@@ -847,7 +846,7 @@ class TestImportErrorConditions:
             result = import_service.import_job(temp_path)
 
             assert result.success is False
-            assert "Failed to parse job/tasks data" in result.errors[0]
+            assert "Invalid job UUID format" in result.errors[0]
 
         finally:
             if temp_path.exists():

@@ -138,13 +138,12 @@ def format_run_table(runs: builtins.list[dict[str, Any]]) -> str:
             except (ValueError, TypeError):
                 duration = None
 
+        run_id = run.get("id") or ""
         rows.append(
             [
-                run.get("id", "-")[:8] + "..."
-                if len(run.get("id", "")) > 8
-                else run.get("id", "-"),
-                run.get("task_name", "-"),
-                run.get("status", "-"),
+                run_id[:8] + "..." if len(run_id) > 8 else (run_id or "-"),
+                run.get("task_name") or "-",
+                run.get("status") or "-",
                 format_timestamp(run.get("start_time")),
                 format_duration(duration),
             ]
@@ -155,27 +154,28 @@ def format_run_table(runs: builtins.list[dict[str, Any]]) -> str:
 
 @runs.command()
 @click.option("-n", "--limit", default=10, help="Maximum number of runs to list (default: 10)")
+@click.option("--table", "-t", "use_table", is_flag=True, help="Output as table")
 @click.pass_context
-def list(ctx: click.Context, limit: int) -> None:
+def list(ctx: click.Context, limit: int, use_table: bool) -> None:
     """
     List recent runs.
 
-    Retrieves a list of runs from the API and displays them in a table format
-    with key information including ID, task name, status, start time, and duration.
+    Retrieves a list of runs from the API. Default output is JSON, use --table
+    for formatted table display.
 
     Examples:
 
     \b
-        # List default number of runs (10)
-        claude-code-scheduler runs list
+        # List runs as JSON (default)
+        claude-code-scheduler cli runs list
+
+    \b
+        # List runs as table
+        claude-code-scheduler cli runs list --table
 
     \b
         # List more runs
-        claude-code-scheduler runs list -n 25
-
-    \b
-        # List runs from custom API URL
-        claude-code-scheduler runs list --api-url http://localhost:8080
+        claude-code-scheduler cli runs list -n 25
     """
     api_url = ctx.obj["api_url"]
 
@@ -188,11 +188,14 @@ def list(ctx: click.Context, limit: int) -> None:
             if limit:
                 runs_list = runs_list[:limit]
 
-            if runs_list:
-                click.echo(format_run_table(runs_list))
-                click.echo(f"\nShowing {len(runs_list)} runs")
+            if use_table:
+                if runs_list:
+                    click.echo(format_run_table(runs_list))
+                    click.echo(f"\nShowing {len(runs_list)} runs")
+                else:
+                    click.echo("No runs found.")
             else:
-                click.echo("No runs found.")
+                click.echo(json.dumps({"runs": runs_list, "count": len(runs_list)}, indent=2))
 
     except SchedulerAPIError as e:
         logger.error(f"Failed to list runs: {e}")

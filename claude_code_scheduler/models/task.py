@@ -222,8 +222,14 @@ class Task:
             on_failure=notifications_data.get("on_failure", True),
         )
 
+        # Generate defaults for new tasks (id, timestamps)
+        task_id = UUID(data["id"]) if "id" in data else uuid4()
+        now = datetime.now()
+        created_at = datetime.fromisoformat(data["created_at"]) if "created_at" in data else now
+        updated_at = datetime.fromisoformat(data["updated_at"]) if "updated_at" in data else now
+
         return cls(
-            id=UUID(data["id"]),
+            id=task_id,
             job_id=UUID(data["job_id"]) if data.get("job_id") else None,
             name=data.get("name", "Untitled Task"),
             enabled=data.get("enabled", True),
@@ -235,7 +241,7 @@ class Task:
             prompt_type=data.get("prompt_type", data.get("command_type", "prompt")),
             prompt=data.get("prompt", data.get("command", "")),
             # NOTE: working_directory ignored - migrated to Job
-            permissions=data.get("permissions", "default"),
+            permissions=data.get("permissions", "bypass"),
             session_mode=data.get("session_mode", "new"),
             last_session_id=(
                 UUID(data["last_session_id"]) if data.get("last_session_id") else None
@@ -244,7 +250,7 @@ class Task:
             disallowed_tools=data.get("disallowed_tools", []),
             retry=retry,
             notifications=notifications,
-            created_at=datetime.fromisoformat(data["created_at"]),
-            updated_at=datetime.fromisoformat(data["updated_at"]),
+            created_at=created_at,
+            updated_at=updated_at,
             last_run_status=data.get("last_run_status"),
         )

@@ -22,12 +22,45 @@ from .logging_config import get_logger, setup_logging
 logger = get_logger(__name__)
 
 
-def format_task_table(tasks: builtins.list[dict[str, Any]]) -> str:
+def format_duration(seconds: float | None) -> str:
+    """Format duration in seconds to human readable string."""
+    if seconds is None:
+        return "-"
+    if seconds < 60:
+        return f"{seconds:.0f}s"
+    elif seconds < 3600:
+        minutes = int(seconds // 60)
+        secs = int(seconds % 60)
+        return f"{minutes}m{secs}s"
+    else:
+        hours = int(seconds // 3600)
+        minutes = int((seconds % 3600) // 60)
+        return f"{hours}h{minutes}m"
+
+
+def format_timestamp(timestamp: str | None) -> str:
+    """Format ISO timestamp to readable string."""
+    if not timestamp:
+        return "-"
+    try:
+        from datetime import datetime
+
+        dt = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+        return dt.strftime("%Y-%m-%d %H:%M")
+    except (ValueError, AttributeError):
+        return timestamp[:16] if timestamp else "-"
+
+
+def format_task_table(
+    tasks: builtins.list[dict[str, Any]],
+    runs: builtins.list[dict[str, Any]] | None = None,
+) -> str:
     """
-    Format tasks as a table for display.
+    Format tasks as a table with run information.
 
     Args:
         tasks: List of task dictionaries
+        runs: Optional list of run dictionaries to join with tasks
 
     Returns:
         Formatted table string
@@ -35,20 +68,45 @@ def format_task_table(tasks: builtins.list[dict[str, Any]]) -> str:
     if not tasks:
         return "No tasks found."
 
-    headers = ["ID", "Name", "Enabled", "Model", "Commit", "Last Run Status"]
+    headers = ["Task ID", "Task Name", "Run ID", "Status", "Start Time", "Duration"]
     rows = []
 
+    # Build task_id -> runs mapping
+    runs_by_task: dict[str, builtins.list[dict[str, Any]]] = {}
+    if runs:
+        for run in runs:
+            task_id = run.get("task_id", "")
+            if task_id not in runs_by_task:
+                runs_by_task[task_id] = []
+            runs_by_task[task_id].append(run)
+
+        # Sort runs by start_time (oldest first)
+        for task_id in runs_by_task:
+            runs_by_task[task_id].sort(
+                key=lambda r: r.get("start_time") or r.get("scheduled_time") or ""
+            )
+
     for task in tasks:
-        rows.append(
-            [
-                task.get("id", "")[:8],  # Shorten UUID for display
-                task.get("name", "")[:30],  # Truncate long names
-                "✓" if task.get("enabled", False) else "✗",
-                task.get("model", "")[:20],
-                "✓" if task.get("commit_on_success", True) else "✗",
-                task.get("last_run_status", "Never")[:15],
-            ]
-        )
+        task_id = task.get("id", "")
+        task_name = (task.get("name") or "")[:25]
+        task_runs = runs_by_task.get(task_id, [])
+
+        if task_runs:
+            # One row per run
+            for run in task_runs:
+                rows.append(
+                    [
+                        task_id[:8],
+                        task_name,
+                        (run.get("id") or "")[:8],
+                        run.get("status", "-"),
+                        format_timestamp(run.get("start_time")),
+                        format_duration(run.get("duration")),
+                    ]
+                )
+        else:
+            # Task with no runs
+            rows.append([task_id[:8], task_name, "-", "-", "-", "-"])
 
     return tabulate.tabulate(rows, headers=headers, tablefmt="grid")
 
@@ -61,29 +119,25 @@ def tasks() -> None:
 
 @tasks.command()
 @api_url_option
+@click.option("--table", "-t", "use_table", is_flag=True, help="Output as table")
 @click.option("-v", "--verbose", count=True, help="Enable verbose output")
-def list(api_url: str, verbose: int) -> None:
-    """List all tasks in a table format.
+def list(api_url: str, use_table: bool, verbose: int) -> None:
+    """List all tasks.
 
     Examples:
 
     \b
-        # List all tasks
-        claude-code-scheduler tasks list
+        # List all tasks as JSON (default)
+        claude-code-scheduler cli tasks list
 
     \b
-        # List tasks with custom API URL
-        claude-code-scheduler tasks list --api-url http://localhost:8080
+        # List tasks as table (joined with runs)
+        claude-code-scheduler cli tasks list --table
 
     \b
     Output Format:
-        Displays a formatted table with columns:
-        - ID: Task identifier (shortened)
-        - Name: Task name
-        - Enabled: ✓ if enabled, ✗ if disabled
-        - Model: AI model used
-        - Commit: ✓ if commit_on_success enabled, ✗ if disabled
-        - Last Run Status: Status of most recent execution
+        JSON (default): Array of task objects with full details
+        Table (--table): Task/Run table with one row per run (oldest first)
     """
     setup_logging(verbose)
 
@@ -100,11 +154,18 @@ def list(api_url: str, verbose: int) -> None:
                 click.echo(f"Unexpected response format: {response}")
                 return
 
-            table_output = format_task_table(tasks_list)
-            click.echo(table_output)
+            if use_table:
+                # Fetch runs to join with tasks
+                logger.debug("Fetching runs from API for table join")
+                runs_response = client.get("/api/runs")
+                runs_list = runs_response.get("runs", [])
 
-            if verbose:
-                click.echo(f"\nTotal tasks: {len(tasks_list)}")
+                table_output = format_task_table(tasks_list, runs_list)
+                click.echo(table_output)
+                if verbose:
+                    click.echo(f"\nTotal tasks: {len(tasks_list)}, Total runs: {len(runs_list)}")
+            else:
+                click.echo(json.dumps(response, indent=2))
 
     except SchedulerAPIError as e:
         click.echo(f"Error: {e}", err=True)

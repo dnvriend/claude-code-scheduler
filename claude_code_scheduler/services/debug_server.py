@@ -106,6 +106,10 @@ class DebugRequestHandler(BaseHTTPRequestHandler):
     job_export_provider: Callable[[UUID], dict[str, Any]] | None = None
     job_export_file_provider: Callable[[UUID, str], dict[str, Any]] | None = None
     job_import_provider: Callable[[dict[str, Any]], dict[str, Any]] | None = None
+    # Short ID resolvers (for prefix matching)
+    task_id_resolver: Callable[[str], UUID | None] | None = None
+    job_id_resolver: Callable[[str], UUID | None] | None = None
+    run_id_resolver: Callable[[str], UUID | None] | None = None
     server_port: int = DEFAULT_DEBUG_PORT
 
     def log_message(self, format: str, *args: Any) -> None:
@@ -291,28 +295,54 @@ class DebugRequestHandler(BaseHTTPRequestHandler):
             self._send_error(404, "Not found")
 
     def _extract_task_id(self, suffix: str) -> UUID | None:
-        """Extract task ID from path like /api/tasks/{id}{suffix}."""
+        """Extract task ID from path like /api/tasks/{id}{suffix}.
+
+        Supports both full UUIDs and short ID prefixes (e.g., first 8 chars).
+        """
+        path = self.path
+        if suffix:
+            path = path.removesuffix(suffix)
+        task_id_str = path.replace("/api/tasks/", "")
+
+        # Try parsing as full UUID first
         try:
-            path = self.path
-            if suffix:
-                path = path.removesuffix(suffix)
-            task_id_str = path.replace("/api/tasks/", "")
             return UUID(task_id_str)
         except ValueError:
-            self._send_error(400, f"Invalid task ID: {self.path}")
-            return None
+            pass
+
+        # Try resolving as short ID prefix
+        if self.task_id_resolver:
+            resolved = self.task_id_resolver(task_id_str)
+            if resolved:
+                return resolved
+
+        self._send_error(400, f"Invalid or ambiguous task ID: {task_id_str}")
+        return None
 
     def _extract_run_id(self, suffix: str) -> UUID | None:
-        """Extract run ID from path like /api/runs/{id}{suffix}."""
+        """Extract run ID from path like /api/runs/{id}{suffix}.
+
+        Supports both full UUIDs and short ID prefixes (e.g., first 8 chars).
+        """
+        path = self.path
+        if suffix:
+            path = path.removesuffix(suffix)
+        run_id_str = path.replace("/api/runs/", "")
+
+        # Try parsing as full UUID first
         try:
-            path = self.path
-            if suffix:
-                path = path.removesuffix(suffix)
-            run_id_str = path.replace("/api/runs/", "")
             return UUID(run_id_str)
         except ValueError:
-            self._send_error(400, f"Invalid run ID: {self.path}")
-            return None
+            pass
+
+        # Try resolving as short ID prefix
+        if self.run_id_resolver:
+            resolved = self.run_id_resolver(run_id_str)
+            if resolved:
+                return resolved
+
+        self._send_error(400, f"Invalid or ambiguous run ID: {run_id_str}")
+        return None
 
     def _extract_profile_id(self, suffix: str) -> UUID | None:
         """Extract profile ID from path like /api/profiles/{id}{suffix}."""
@@ -327,16 +357,29 @@ class DebugRequestHandler(BaseHTTPRequestHandler):
             return None
 
     def _extract_job_id(self, suffix: str) -> UUID | None:
-        """Extract job ID from path like /api/jobs/{id}{suffix}."""
+        """Extract job ID from path like /api/jobs/{id}{suffix}.
+
+        Supports both full UUIDs and short ID prefixes (e.g., first 8 chars).
+        """
+        path = self.path
+        if suffix:
+            path = path.removesuffix(suffix)
+        job_id_str = path.replace("/api/jobs/", "")
+
+        # Try parsing as full UUID first
         try:
-            path = self.path
-            if suffix:
-                path = path.removesuffix(suffix)
-            job_id_str = path.replace("/api/jobs/", "")
             return UUID(job_id_str)
         except ValueError:
-            self._send_error(400, f"Invalid job ID: {self.path}")
-            return None
+            pass
+
+        # Try resolving as short ID prefix
+        if self.job_id_resolver:
+            resolved = self.job_id_resolver(job_id_str)
+            if resolved:
+                return resolved
+
+        self._send_error(400, f"Invalid or ambiguous job ID: {job_id_str}")
+        return None
 
     def _read_json_body(self) -> dict[str, Any] | None:
         """Read and parse JSON body from request."""

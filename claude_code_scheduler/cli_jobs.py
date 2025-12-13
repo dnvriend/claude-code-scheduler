@@ -12,6 +12,7 @@ import builtins
 import json
 import os
 import sys
+from typing import Any
 
 import click
 from tabulate import tabulate
@@ -20,6 +21,140 @@ from .cli_client import SchedulerAPIError, SchedulerClient, api_url_option
 from .logging_config import get_logger, setup_logging
 
 logger = get_logger(__name__)
+
+
+def format_duration(seconds: float | None) -> str:
+    """Format duration in seconds to human readable string."""
+    if seconds is None:
+        return "-"
+    if seconds < 60:
+        return f"{seconds:.0f}s"
+    elif seconds < 3600:
+        minutes = int(seconds // 60)
+        secs = int(seconds % 60)
+        return f"{minutes}m{secs}s"
+    else:
+        hours = int(seconds // 3600)
+        minutes = int((seconds % 3600) // 60)
+        return f"{hours}h{minutes}m"
+
+
+def format_timestamp(timestamp: str | None) -> str:
+    """Format ISO timestamp to readable string."""
+    if not timestamp:
+        return "-"
+    try:
+        from datetime import datetime
+
+        dt = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+        return dt.strftime("%Y-%m-%d %H:%M")
+    except (ValueError, AttributeError):
+        return timestamp[:16] if timestamp else "-"
+
+
+def format_jobs_table(
+    jobs: builtins.list[dict[str, Any]],
+    tasks: builtins.list[dict[str, Any]],
+    runs: builtins.list[dict[str, Any]],
+) -> str:
+    """
+    Format jobs with tasks and runs as a hierarchical table.
+
+    Args:
+        jobs: List of job dictionaries
+        tasks: List of task dictionaries
+        runs: List of run dictionaries
+
+    Returns:
+        Formatted table string
+    """
+    if not jobs:
+        return "No jobs found."
+
+    headers = [
+        "Job ID",
+        "Job Name",
+        "Task ID",
+        "Task Name",
+        "Run ID",
+        "Status",
+        "Start",
+        "Duration",
+    ]
+    rows: builtins.list[builtins.list[str]] = []
+
+    # Build task_id -> runs mapping
+    runs_by_task: dict[str, builtins.list[dict[str, Any]]] = {}
+    for run in runs:
+        task_id = run.get("task_id", "")
+        if task_id not in runs_by_task:
+            runs_by_task[task_id] = []
+        runs_by_task[task_id].append(run)
+
+    # Sort runs by start_time (oldest first)
+    for task_id in runs_by_task:
+        runs_by_task[task_id].sort(
+            key=lambda r: r.get("start_time") or r.get("scheduled_time") or ""
+        )
+
+    # Build job_id -> tasks mapping (preserve task_order from job)
+    tasks_by_job: dict[str, builtins.list[dict[str, Any]]] = {}
+    task_by_id: dict[str, dict[str, Any]] = {}
+    for task in tasks:
+        task_id = task.get("id", "")
+        job_id = task.get("job_id", "")
+        task_by_id[task_id] = task
+        if job_id:
+            if job_id not in tasks_by_job:
+                tasks_by_job[job_id] = []
+            tasks_by_job[job_id].append(task)
+
+    for job in jobs:
+        job_id = job.get("id", "")
+        job_name = (job.get("name") or "")[:20]
+
+        # Get tasks in execution order (from task_order if available)
+        task_order = job.get("task_order", [])
+        job_tasks: builtins.list[dict[str, Any]] = []
+
+        if task_order:
+            # Use task_order for ordering
+            for tid in task_order:
+                if tid in task_by_id:
+                    job_tasks.append(task_by_id[tid])
+        else:
+            # Fallback to tasks_by_job
+            job_tasks = tasks_by_job.get(job_id, [])
+
+        if not job_tasks:
+            # Job with no tasks
+            rows.append([job_id[:8], job_name, "-", "-", "-", "-", "-", "-"])
+        else:
+            for task in job_tasks:
+                task_id = task.get("id", "")
+                task_name = (task.get("name") or "")[:20]
+                task_runs = runs_by_task.get(task_id, [])
+
+                if task_runs:
+                    # One row per run
+                    for run in task_runs:
+                        rows.append(
+                            [
+                                job_id[:8],
+                                job_name,
+                                task_id[:8],
+                                task_name,
+                                (run.get("id") or "")[:8],
+                                run.get("status", "-"),
+                                format_timestamp(run.get("start_time")),
+                                format_duration(run.get("duration")),
+                            ]
+                        )
+                else:
+                    # Task with no runs
+                    rows.append([job_id[:8], job_name, task_id[:8], task_name, "-", "-", "-", "-"])
+
+    return tabulate(rows, headers=headers, tablefmt="grid")
 
 
 @click.group()
@@ -38,14 +173,9 @@ def jobs(ctx: click.Context, verbose: int) -> None:
 
 @jobs.command("list")
 @api_url_option
-@click.option(
-    "--output",
-    default="json",
-    type=click.Choice(["json", "table"]),
-    help="Output format (default: json)",
-)
+@click.option("--table", "-t", "use_table", is_flag=True, help="Output as table")
 @click.pass_context
-def list_jobs(ctx: click.Context, api_url: str, output: str) -> None:
+def list_jobs(ctx: click.Context, api_url: str, use_table: bool) -> None:
     """List all jobs.
 
     Retrieves and displays all configured jobs with their basic information.
@@ -57,44 +187,45 @@ def list_jobs(ctx: click.Context, api_url: str, output: str) -> None:
         claude-code-scheduler cli jobs list
 
     \b
-        # List jobs as table
-        claude-code-scheduler cli jobs list --output table
+        # List jobs as table (joined with tasks and runs)
+        claude-code-scheduler cli jobs list --table
 
     \b
     Output Format:
-        JSON: Array of job objects with id, name, description, status fields
-        Table: Formatted table showing id, name, status, description columns
+        JSON (default): Array of job objects with full details
+        Table (--table): Job/Task/Run hierarchy with one row per run
     """
-    _verbose = ctx.obj.get("verbose", 0)  # noqa: F841
+    _verbose = ctx.obj.get("verbose", 0)
 
     try:
         with SchedulerClient(api_url) as client:
             logger.debug("Fetching jobs from %s", api_url)
             response = client.get("/api/jobs")
+            jobs_list: builtins.list[dict[str, Any]] = response.get("jobs", [])
 
-            if output == "table":
-                jobs_list: builtins.list[dict[str, str]] = response.get("jobs", [])
+            if use_table:
                 if not jobs_list:
                     click.echo("No jobs found.")
                     return
 
-                table_data = []
-                for job in jobs_list:
-                    table_data.append(
-                        [
-                            job.get("id", "")[:8] + "...",
-                            job.get("name", ""),
-                            job.get("status", ""),
-                            job.get("description", "")[:40],
-                        ]
-                    )
+                # Fetch tasks and runs for the table join
+                logger.debug("Fetching tasks and runs for table join")
+                tasks_response = client.get("/api/tasks")
+                runs_response = client.get("/api/runs")
+                tasks_list = tasks_response.get("tasks", [])
+                runs_list = runs_response.get("runs", [])
 
-                headers = ["ID", "Name", "Status", "Description"]
-                click.echo(tabulate(table_data, headers=headers, tablefmt="grid"))
+                table_output = format_jobs_table(jobs_list, tasks_list, runs_list)
+                click.echo(table_output)
+
+                if _verbose:
+                    msg = f"\nTotal: {len(jobs_list)} jobs, "
+                    msg += f"{len(tasks_list)} tasks, {len(runs_list)} runs"
+                    click.echo(msg)
             else:
                 click.echo(json.dumps(response, indent=2))
 
-            logger.info("Retrieved %d jobs", len(response.get("jobs", [])))
+            logger.info("Retrieved %d jobs", len(jobs_list))
 
     except SchedulerAPIError as e:
         logger.error("Failed to list jobs: %s", e)
@@ -417,12 +548,41 @@ def run(ctx: click.Context, api_url: str, job_id: str) -> None:
     Output Format:
         Returns JSON with success status and message
     """
-    _verbose = ctx.obj.get("verbose", 0)  # noqa: F841
+    _verbose = ctx.obj.get("verbose", 0)
 
     try:
         with SchedulerClient(api_url) as client:
             logger.debug("Starting job %s", job_id)
             response = client.post(f"/api/jobs/{job_id}/run")
+
+            # Check for validation errors with hints
+            if not response.get("success", True):
+                error_msg = response.get("error", "Unknown error")
+                hints = response.get("hints", [])
+                details = response.get("details", {})
+
+                click.echo(f"Error: {error_msg}", err=True)
+
+                # Show details if available
+                if details and _verbose >= 1:
+                    click.echo("\nDetails:", err=True)
+                    for key, value in details.items():
+                        click.echo(f"  {key}: {value}", err=True)
+
+                # Show hints if available
+                if hints:
+                    click.echo("\nHow to fix:", err=True)
+                    for i, hint in enumerate(hints, 1):
+                        click.echo(f"  {i}. {hint}", err=True)
+
+                # Show full JSON response in verbose mode
+                if _verbose >= 2:
+                    click.echo("\nFull response:")
+                    click.echo(json.dumps(response, indent=2))
+
+                sys.exit(1)
+
+            # Success - show response
             click.echo(json.dumps(response, indent=2))
             logger.info("Started job: %s", job_id)
 
@@ -611,14 +771,9 @@ def export_job(ctx: click.Context, api_url: str, job_id: str, out: str) -> None:
 @jobs.command("tasks")
 @api_url_option
 @click.argument("job_id")
-@click.option(
-    "--output",
-    default="json",
-    type=click.Choice(["json", "table"]),
-    help="Output format (default: json)",
-)
+@click.option("--table", "-t", "use_table", is_flag=True, help="Output as table")
 @click.pass_context
-def list_tasks(ctx: click.Context, api_url: str, job_id: str, output: str) -> None:
+def list_tasks(ctx: click.Context, api_url: str, job_id: str, use_table: bool) -> None:
     """List all tasks belonging to a job.
 
     Retrieves tasks that are assigned to the specified job.
@@ -631,7 +786,7 @@ def list_tasks(ctx: click.Context, api_url: str, job_id: str, output: str) -> No
 
     \b
         # List tasks as table
-        claude-code-scheduler cli jobs tasks <job-id> --output table
+        claude-code-scheduler cli jobs tasks <job-id> --table
 
     \b
     Output Format:
@@ -645,7 +800,7 @@ def list_tasks(ctx: click.Context, api_url: str, job_id: str, output: str) -> No
             logger.debug("Fetching tasks for job %s from %s", job_id, api_url)
             response = client.get(f"/api/jobs/{job_id}/tasks")
 
-            if output == "table":
+            if use_table:
                 tasks_list: builtins.list[dict[str, str]] = response.get("tasks", [])
                 if not tasks_list:
                     click.echo("No tasks found for this job.")
@@ -655,10 +810,10 @@ def list_tasks(ctx: click.Context, api_url: str, job_id: str, output: str) -> No
                 for task in tasks_list:
                     table_data.append(
                         [
-                            task.get("id", "")[:8] + "...",
-                            task.get("name", ""),
+                            (task.get("id") or "")[:8] + "...",
+                            task.get("name") or "",
                             "enabled" if task.get("enabled") else "disabled",
-                            task.get("model", ""),
+                            task.get("model") or "",
                         ]
                     )
 

@@ -40,6 +40,29 @@ claude-code-scheduler gui
 curl http://127.0.0.1:5679/api/health
 ```
 
+## Headless Server Mode
+
+Run as a headless server without GUI for CI/CD, containers, or daemon use:
+
+```bash
+# Launch headless server
+claude-code-scheduler server
+
+# With options
+claude-code-scheduler server --port 8080 --workers 5
+
+# Verbose logging
+claude-code-scheduler server -v
+```
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--port, -p` | 5679 | REST API port |
+| `--workers, -w` | 3 | Max parallel jobs |
+| `-v` | - | Verbose logging (-vv for debug) |
+
+The server provides the same REST API as the GUI and supports parallel job execution.
+
 ## Data Model
 
 ```

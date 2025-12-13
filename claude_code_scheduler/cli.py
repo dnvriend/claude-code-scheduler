@@ -45,7 +45,9 @@ from claude_code_scheduler.cli_state import health, scheduler, state
 from claude_code_scheduler.cli_tasks import tasks
 from claude_code_scheduler.completion import completion_command
 from claude_code_scheduler.logging_config import get_logger, setup_logging
+from claude_code_scheduler.services.headless_server import HeadlessServer
 from claude_code_scheduler.startup_banner import log_gui_banner
+from claude_code_scheduler.storage import ConfigStorage
 
 logger = get_logger(__name__)
 
@@ -131,6 +133,78 @@ def gui_command(verbose: int, restport: int) -> None:
     from claude_code_scheduler.main import main as gui_main
 
     sys.exit(gui_main(restport=restport))
+
+
+@click.command("server")
+@click.option(
+    "-v",
+    "--verbose",
+    count=True,
+    help="Enable verbose output for server logging",
+)
+@click.option(
+    "--port",
+    "-p",
+    default=5679,
+    type=int,
+    help="Port for REST API server (default: 5679)",
+)
+@click.option(
+    "--workers",
+    "-w",
+    type=int,
+    help="Max parallel job workers (default: from settings, fallback 3)",
+)
+def server_command(verbose: int, port: int, workers: int | None) -> None:
+    """Launch the Claude Code Scheduler headless server.
+
+    The headless server runs without GUI and provides REST API for job management
+    and execution. Jobs are executed in parallel using a thread pool.
+
+    Examples:
+
+    \b
+        # Launch server with defaults
+        claude-code-scheduler server
+
+    \b
+        # Launch with custom port and workers
+        claude-code-scheduler server --port 8080 --workers 5
+
+    \b
+        # Launch with INFO logging
+        claude-code-scheduler server -v
+
+    \b
+        # Launch with DEBUG logging
+        claude-code-scheduler server -vv
+    """
+    setup_logging(verbose)
+
+    # Load settings for defaults
+    storage = ConfigStorage()
+    settings = storage.load_settings()
+    final_workers = workers if workers is not None else settings.max_concurrent_tasks
+
+    # Print startup banner
+    click.echo("=" * 60)
+    click.echo("Claude Code Scheduler - Headless Server")
+    click.echo("=" * 60)
+    click.echo(f"REST API: http://127.0.0.1:{port}")
+    click.echo(f"Workers: {final_workers}")
+    click.echo("=" * 60)
+    click.echo("Press Ctrl+C to stop")
+    click.echo()
+
+    # Create and start server
+    try:
+        server = HeadlessServer(port=port, workers=final_workers)
+        server.start()
+    except KeyboardInterrupt:
+        click.echo("\nShutting down...")
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
 
 
 # Debug command group for inspection
@@ -615,6 +689,7 @@ cli_group.add_command(scheduler)
 # Add subcommands to main
 main.add_command(completion_command)
 main.add_command(gui_command)
+main.add_command(server_command)
 main.add_command(debug_group)
 main.add_command(cli_group)
 

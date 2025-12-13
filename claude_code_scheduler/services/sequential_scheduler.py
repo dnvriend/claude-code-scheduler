@@ -95,6 +95,8 @@ class SequentialSchedulerConfig:
     on_job_started: Callable[[UUID], None] | None = None
     on_job_progress: Callable[[UUID, int, int], None] | None = None  # job_id, current, total
     on_job_completed: Callable[[UUID, JobStatus], None] | None = None
+    on_task_started: Callable[[UUID, UUID], None] | None = None
+    on_task_completed: Callable[[UUID, UUID, RunStatus], None] | None = None
 
 
 class SequentialScheduler:
@@ -133,17 +135,43 @@ class SequentialScheduler:
         Returns:
             True if job was started, False if already running or no tasks.
         """
+        logger.debug(
+            "start_job called for '%s' (%s): task_order=%d tasks, worktree=%s",
+            job.name,
+            job.id,
+            len(job.task_order),
+            job.working_directory.use_git_worktree,
+        )
+
         if job.id in self._active_jobs:
-            logger.warning("Job %s is already running", job.name)
+            logger.warning(
+                "Job '%s' (%s) is already running - cannot start again",
+                job.name,
+                job.id,
+            )
             return False
 
         if not job.task_order:
-            logger.warning("Job %s has no tasks in task_order", job.name)
+            logger.warning(
+                "Job '%s' (%s) has no tasks in task_order - nothing to execute. "
+                "Create tasks and add them to the job's task_order.",
+                job.name,
+                job.id,
+            )
             return False
 
         # Create worktree if configured
         if job.working_directory.use_git_worktree:
+            logger.info(
+                "Job '%s' uses git worktree - setting up worktree in %s",
+                job.name,
+                job.working_directory.path,
+            )
             if not self._setup_worktree(job):
+                logger.error(
+                    "Failed to setup git worktree for job '%s' - aborting job start",
+                    job.name,
+                )
                 return False
 
         # Create execution state
@@ -187,13 +215,22 @@ class SequentialScheduler:
         wd = job.working_directory
         worktree_name = wd.worktree_name or f"job-{str(job.id)[:8]}"
 
-        logger.info("Setting up worktree '%s' for job '%s'", worktree_name, job.name)
+        logger.info(
+            "Setting up worktree '%s' for job '%s' in repo '%s'",
+            worktree_name,
+            job.name,
+            wd.path,
+        )
+        if wd.worktree_branch:
+            logger.debug("  Base branch: %s", wd.worktree_branch)
 
         try:
             git_service = GitService(wd.path)
+            logger.debug("GitService initialized for %s", wd.path)
 
             # Ensure trees/ is in .gitignore
             git_service.ensure_trees_gitignored()
+            logger.debug("Ensured trees/ is in .gitignore")
 
             # Create worktree with new branch based on selected branch
             worktree_path = git_service.create_worktree(
@@ -201,11 +238,25 @@ class SequentialScheduler:
                 base_branch=wd.worktree_branch,
             )
 
-            logger.info("Worktree ready: %s", worktree_path)
+            logger.info("Worktree ready at: %s", worktree_path)
             return True
 
         except GitServiceError as e:
-            logger.error("Failed to create worktree: %s", e)
+            logger.error(
+                "Git worktree setup failed for job '%s': %s. "
+                "Ensure '%s' is a valid git repository and you have write permissions.",
+                job.name,
+                e,
+                wd.path,
+            )
+            return False
+        except Exception as e:
+            logger.error(
+                "Unexpected error setting up worktree for job '%s': %s",
+                job.name,
+                e,
+                exc_info=True,
+            )
             return False
 
     def stop_job(self, job_id: UUID, status: JobStatus = JobStatus.FAILED) -> bool:
@@ -312,6 +363,10 @@ class SequentialScheduler:
                 state.total_tasks,
             )
 
+        # Notify task started
+        if self.config.on_task_started:
+            self.config.on_task_started(state.job_id, task_id)
+
         # Run the task
         if self.config.task_runner:
             logger.info(
@@ -327,6 +382,11 @@ class SequentialScheduler:
 
     def _handle_task_success(self, state: JobExecutionState) -> None:
         """Handle successful task completion - advance to next task."""
+        # Notify task completed
+        task_id = state.current_task_id
+        if task_id and self.config.on_task_completed:
+            self.config.on_task_completed(state.job_id, task_id, RunStatus.SUCCESS)
+
         state.retry_count = 0  # Reset retry count
         state.current_index += 1
 
@@ -371,6 +431,10 @@ class SequentialScheduler:
             timer.start()
             self._retry_timers[state.job_id] = timer
         else:
+            # Notify task completed with failure status
+            if self.config.on_task_completed:
+                self.config.on_task_completed(state.job_id, run.task_id, RunStatus.FAILED)
+
             logger.error(
                 "Task failed after %d retries, stopping job",
                 state.retry_count,
@@ -379,6 +443,11 @@ class SequentialScheduler:
 
     def _handle_task_cancelled(self, state: JobExecutionState) -> None:
         """Handle task cancellation - stop job sequence."""
+        # Notify task completed with cancelled status
+        task_id = state.current_task_id
+        if task_id and self.config.on_task_completed:
+            self.config.on_task_completed(state.job_id, task_id, RunStatus.CANCELLED)
+
         logger.info("Task cancelled, stopping job %s", state.job_id)
         self._cleanup_job(state, JobStatus.FAILED)
 

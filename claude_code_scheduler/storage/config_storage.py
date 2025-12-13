@@ -456,3 +456,56 @@ class ConfigStorage:
     def save_settings(self, settings: Settings) -> bool:
         """Save settings to storage."""
         return self._write_json(self.settings_file, settings.to_dict())
+
+    # Short ID resolution
+
+    def resolve_task_id(self, short_id: str) -> UUID | None:
+        """Resolve a short task ID (prefix) to a full UUID.
+
+        Args:
+            short_id: A short ID prefix (e.g., first 8 chars of UUID)
+
+        Returns:
+            Full UUID if exactly one match found, None otherwise
+        """
+        short_id_lower = short_id.lower()
+        tasks = self.load_tasks()
+        matches = [t for t in tasks if str(t.id).lower().startswith(short_id_lower)]
+
+        if len(matches) == 1:
+            return matches[0].id
+        return None
+
+    def resolve_job_id(self, short_id: str) -> UUID | None:
+        """Resolve a short job ID (prefix) to a full UUID.
+
+        Args:
+            short_id: A short ID prefix (e.g., first 8 chars of UUID)
+
+        Returns:
+            Full UUID if exactly one match found, None otherwise
+        """
+        short_id_lower = short_id.lower()
+        jobs = self.load_jobs()
+        matches = [j for j in jobs if str(j.id).lower().startswith(short_id_lower)]
+
+        if len(matches) == 1:
+            return matches[0].id
+        return None
+
+    def resolve_run_id(self, short_id: str) -> UUID | None:
+        """Resolve a short run ID (prefix) to a full UUID.
+
+        Args:
+            short_id: A short ID prefix (e.g., first 8 chars of UUID)
+
+        Returns:
+            Full UUID if exactly one match found, None otherwise
+        """
+        short_id_lower = short_id.lower()
+        runs = self.load_runs()
+        matches = [r for r in runs if str(r.id).lower().startswith(short_id_lower)]
+
+        if len(matches) == 1:
+            return matches[0].id
+        return None
